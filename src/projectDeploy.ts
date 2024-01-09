@@ -1,6 +1,6 @@
 import { SalesforceOrg } from "./salesforceOrg";
 import { SalesforceCli } from "./salesforceCli";
-import { Diagnostic, DiagnosticSeverity, IntegratedDevelopmentEnvironment, TextDocument } from "./integratedDevelopmentEnvironment";
+import { Diagnostic, DiagnosticSeverity, IntegratedDevelopmentEnvironment, TextDocument, Uri } from "./integratedDevelopmentEnvironment";
 import { JobId } from "./jobId";
 import { Position } from "./position";
 import { Range } from "./range";
@@ -9,6 +9,7 @@ import { ComponentFailure, ProjectDeployReportResult } from "./projectDeployRepo
 
 export async function projectDeploy(params: {
     targetOrg?: SalesforceOrg,
+    sourceDir?: Uri[],
     ide: IntegratedDevelopmentEnvironment,
     cli: SalesforceCli
 }) {
@@ -43,6 +44,7 @@ export async function projectDeploy(params: {
                 ide: params.ide,
                 progressToken,
                 targetOrg: targetOrg,
+                sourceDir: params.sourceDir,
                 cancel: cancel
             });
         }
@@ -58,11 +60,12 @@ async function doProjectDeploy(params: {
     ide: IntegratedDevelopmentEnvironment,
     progressToken: ProgressToken,
     targetOrg: SalesforceOrg,
-    cancel: (jobId: JobId) => {}
+    sourceDir?: Uri[]
+    cancel: (jobId: JobId) => Promise<void>
 }) {
     params.ide.clearDiagnostics();
 
-    const projectDeployStartResult = await params.salesforceCli.projectDeployStart({ targetOrg: params.targetOrg });
+    const projectDeployStartResult = await params.salesforceCli.projectDeployStart({ targetOrg: params.targetOrg, sourceDir: params.sourceDir });
     if (!projectDeployStartResult.hasComponentsToDeploy()) {
         return;
     }
@@ -174,31 +177,47 @@ export function genOnDidSaveTextDocuments({ cli, ide }: {
 }) {
     let projectDeployState: ProjectDeployState = 'Not Started';
 
-    async function runQueueableProjectDeploy() {
+    const toDeploy = new Map<string, Uri>();
+    async function runQueueableProjectDeploy(targetOrg: SalesforceOrg) {
         if (projectDeployState === 'Not Started') {
             projectDeployState = 'In Progress';
+
+            const sourceDir = !targetOrg.getIsScratchOrg() ? [...toDeploy.values()] : undefined;
+            toDeploy.clear();
             await projectDeploy({
                 ide,
-                cli
+                cli,
+                sourceDir,
+                targetOrg
             }).then(async () => {
                 if (projectDeployState === 'Queued') {
                     projectDeployState = 'Not Started';
-                    await runQueueableProjectDeploy();
+                    await runQueueableProjectDeploy(targetOrg);
                 } else {
                     projectDeployState = 'Not Started';
                 }
+            }).catch((e: any) => {
+                ide.showErrorMessage(e.message);
+                projectDeployState = 'Not Started';
             });
         } else if (projectDeployState === 'In Progress') {
             projectDeployState = 'Queued';
         }
     }
 
-    return async function onDidSaveTextDocuments(e: {
+    return async function onDidSaveTextDocuments({ textDocuments }: {
         textDocuments: TextDocument[]
     }): Promise<void> {
         const shouldDeployOnSave = ide.getConfig("sf.zsi.vscode.deployOnSave", true);
         if (shouldDeployOnSave) {
-            await runQueueableProjectDeploy();
+            const defaultOrg = await cli.getDefaultOrg();
+            if (defaultOrg) {
+                textDocuments.forEach(textDocument => {
+                    toDeploy.set(textDocument.uri.getFileSystemPath(), textDocument.uri);
+                });
+
+                await runQueueableProjectDeploy(defaultOrg);
+            }
         }
     };
 }

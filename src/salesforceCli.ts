@@ -37,7 +37,7 @@ export abstract class SalesforceCli {
     abstract getDefaultOrg(): Promise<SalesforceOrg | null>;
     abstract openOrg(alias: string): Promise<void>;
 
-    abstract projectDeployStart(params: { targetOrg: SalesforceOrg; }): Promise<ProjectDeployStartResult>;
+    abstract projectDeployStart(params: { targetOrg: SalesforceOrg; sourceDir? : Uri[]}): Promise<ProjectDeployStartResult>;
     abstract projectDeployReport(params: { jobId: JobId }): Promise<ProjectDeployReportResult>;
     abstract projectDeployResume(params: { jobId: JobId }): Promise<ProjectDeployResumeResult>;
     abstract projectDeployCancel(params: { jobId: JobId }): Promise<ProjectDeployCancelResult>;
